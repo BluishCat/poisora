@@ -105,6 +105,98 @@ FACET_TAGS = {"link": "url", "mention": "mention", "tag": "hashtag"}
 COMPOSER_ACTIONS = (tr("action.post"), tr("action.reply"), tr("action.quote"))
 
 
+def _monitor_work_area(x, y, w, h):
+    """矩形がいちばん重なるモニターの作業領域 (left, top, right, bottom)。分からなければ None"""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                        ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+
+        user32 = ctypes.windll.user32
+        user32.MonitorFromRect.restype = wintypes.HANDLE
+        user32.MonitorFromRect.argtypes = [ctypes.POINTER(wintypes.RECT), wintypes.DWORD]
+        user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(MONITORINFO)]
+        rect = wintypes.RECT(int(x), int(y), int(x + w), int(y + h))
+        hmon = user32.MonitorFromRect(ctypes.byref(rect), 2)  # MONITOR_DEFAULTTONEAREST
+        info = MONITORINFO()
+        info.cbSize = ctypes.sizeof(MONITORINFO)
+        if not hmon or not user32.GetMonitorInfoW(hmon, ctypes.byref(info)):
+            return None
+        work = info.rcWork
+        return work.left, work.top, work.right, work.bottom
+    except Exception:
+        return None
+
+
+def _window_rect(toplevel):
+    """ウィンドウの (x, y, 幅, 高さ)。最小化・非表示などで位置が当てにならなければ None"""
+    try:
+        if toplevel is None or not toplevel.winfo_exists() or toplevel.state() in ("iconic", "withdrawn"):
+            return None
+        x, y = toplevel.winfo_x(), toplevel.winfo_y()
+        w, h = toplevel.winfo_width(), toplevel.winfo_height()
+    except tk.TclError:
+        return None
+    if w < 10 or h < 10 or x <= -30000 or y <= -30000:  # 最小化中は -32000 になる
+        return None
+    return x, y, w, h
+
+
+def _center_over(toplevel, anchor_rect):
+    """toplevel を anchor_rect (x, y, 幅, 高さ) の中央に置く。置けたら True
+
+    メインウィンドウのあるモニターから出ないようにその作業領域に収める。
+    （座標が負になるモニターでも動くよう、主モニターの中央へ逃がすことはしない）
+    """
+    if not anchor_rect:
+        return False
+    try:
+        toplevel.update_idletasks()
+        size = toplevel.geometry().split("+")[0].split("x")
+        w, h = int(size[0]), int(size[1])
+        if w < 10 or h < 10:  # 表示前はまだ 1x1 のことがある
+            w, h = toplevel.winfo_reqwidth(), toplevel.winfo_reqheight()
+        ax, ay, aw, ah = anchor_rect
+        x = ax + (aw - w) // 2
+        y = ay + (ah - h) // 2
+        area = _monitor_work_area(ax, ay, aw, ah)
+        if area:
+            left, top, right, bottom = area
+            x = max(left, min(x, right - w))
+            y = max(top, min(y, bottom - h))
+        toplevel.geometry(f"+{x}+{y}")
+        return True
+    except (tk.TclError, ValueError):
+        return False
+
+
+def _place_over(dialog, anchor):
+    """TkEasyGUI のウィンドウ dialog を、表示時に anchor（メインウィンドウ等）の中央へ出す
+
+    anchor は eg.Window / tk のウィンドウ / (x, y, 幅, 高さ)。
+    TkEasyGUI は表示時に move_to_center() で直前のウィンドウか主モニターの中央へ動かし、
+    しかも座標が負になると主モニターの中央へ移してしまう（左や上にあるモニターで起きる）。
+    そこで move_to_center をこのウィンドウだけ差し替える。位置が取れないときは元の動作のまま。
+    """
+    original = dialog.move_to_center
+
+    def move(center_pos=None):
+        if isinstance(anchor, tuple):
+            rect = anchor
+        else:
+            rect = _window_rect(getattr(anchor, "window", anchor))
+        if not _center_over(dialog.window, rect):
+            original(center_pos)
+
+    dialog.move_to_center = move
+    return dialog
+
+
 def _snippet(text, limit):
     """改行・連続空白を詰めて limit 文字に切り詰めた本文の抜粋（確認表示用）"""
     s = " ".join((text or "").split())
@@ -522,6 +614,11 @@ class MainWindow:
             [eg.Button(tr("login.button"), key="-LOGIN-"), eg.Button(tr("common.cancel"), key="-CANCEL-")]
         ]
         window = eg.Window(tr("login.title"), layout)
+        # ログイン画面はメインウィンドウより先に出るので、前回メインウィンドウがあった場所の中央に出す
+        saved = load_ui_state() or {}
+        pos, size = saved.get("window_pos"), saved.get("window_size")
+        if pos and size:
+            _place_over(window, (pos[0], pos[1], size[0], size[1]))
 
         while True:
             event, values = window.read()
@@ -2507,7 +2604,7 @@ class MainWindow:
                 except Exception:
                     pass
             elif event == "-INLINE_POST_ADD_IMAGE-":
-                files = filedialog.askopenfilenames(filetypes=[(tr("composer.filetype_media"), "*.jpg *.jpeg *.png *.webp *.gif *.mp4")])
+                files = filedialog.askopenfilenames(filetypes=[(tr("composer.filetype_media"), "*.jpg *.jpeg *.png *.webp *.gif *.mp4")], parent=window.window)
                 if files:
                     self._add_images_to_list(window, "-INLINE_POST_", list(files))
             elif event == "-INLINE_POST_CLEAR_IMAGE-":
@@ -3097,13 +3194,13 @@ class MainWindow:
         """動画を添付する。動画は1本のみで、画像とは排他"""
         size = os.path.getsize(path)
         if size > MAX_VIDEO_BYTES:
-            messagebox.showwarning(tr("limit.title"), tr("limit.video_size", size=f"{size / 1000 / 1000:.0f}"))
+            messagebox.showwarning(tr("limit.title"), tr("limit.video_size", size=f"{size / 1000 / 1000:.0f}"), parent=window.window)
             return
 
         # 断片化 mp4 では長さが読めない。その場合の判定はサーバー側に任せる
         info = read_video_info(path)
         if info and info["duration_sec"] and info["duration_sec"] > MAX_VIDEO_SECONDS:
-            messagebox.showwarning(tr("limit.title"), tr("limit.video_length", minutes=f"{info['duration_sec'] / 60:.1f}"))
+            messagebox.showwarning(tr("limit.title"), tr("limit.video_length", minutes=f"{info['duration_sec'] / 60:.1f}"), parent=window.window)
             return
 
         video = {"path": path, "info": info, "alt": ""}
@@ -3128,7 +3225,7 @@ class MainWindow:
         print(f"[DEBUG DND] adding images to list: {new_images}", flush=True)
         for img in new_images:
             if len(current_images) >= 4:
-                messagebox.showwarning(tr("limit.title"), tr("limit.images"))
+                messagebox.showwarning(tr("limit.title"), tr("limit.images"), parent=window.window)
                 break
             
             # Wrap image in data object with alt text
@@ -3293,12 +3390,6 @@ class MainWindow:
         except Exception: pass
 
     def show_post_dialog(self, parent_window):
-        location = None
-        try:
-            location = (parent_window.window.winfo_x() + 50, parent_window.window.winfo_y() + 50)
-        except Exception:
-            pass
-        
         self._dialog_images = []
         self._dialog_video = None
         
@@ -3326,7 +3417,7 @@ class MainWindow:
                 ], text_align="right")
             ]
         ]
-        window = eg.Window(tr("postdlg.title"), layout, resizable=True, location=location)
+        window = _place_over(eg.Window(tr("postdlg.title"), layout, resizable=True), parent_window)
         self._active_dialog_window = window
         
         # Hide initially
@@ -3363,7 +3454,7 @@ class MainWindow:
                 break
             
             if event == "-ADD_IMAGE-":
-                files = filedialog.askopenfilenames(filetypes=[(tr("composer.filetype_media"), "*.jpg *.jpeg *.png *.webp *.gif *.mp4")])
+                files = filedialog.askopenfilenames(filetypes=[(tr("composer.filetype_media"), "*.jpg *.jpeg *.png *.webp *.gif *.mp4")], parent=window.window)
                 if files:
                     self._add_images_to_list(window, "-", list(files))
             
@@ -3397,12 +3488,6 @@ class MainWindow:
     def show_settings_dialog(self, parent_window, tabs):
         import tkinter.font as tkfont
         
-        location = None
-        try:
-            location = (parent_window.window.winfo_x(), parent_window.window.winfo_y())
-        except Exception:
-            pass
-            
         # Get list of available fonts
         families = sorted([f for f in tkfont.families() if f and not f.startswith("@")])
         sizes = [8, 9, 10, 11, 12, 13, 14, 16, 18, 20]
@@ -3433,14 +3518,8 @@ class MainWindow:
             [eg.Button(tr("common.save"), key="-SAVE_SETTINGS-"), eg.Button(tr("common.cancel"), key="-CANCEL-")]
         ]
         
-        settings_win = eg.Window(tr("settings.title"), layout, modal=True, location=location)
-        
-        # TkEasyGUI は初回の read() 時に中央寄せなどの自動配置を行う場合があるため、
-        # 一度非表示のまま（または一瞬だけ）読んでから位置を明示的に上書きします。
-        settings_win.read(timeout=1)
-        if location:
-            settings_win.window.geometry(f"+{location[0]}+{location[1]}")
-            
+        settings_win = _place_over(eg.Window(tr("settings.title"), layout, modal=True), parent_window)
+
         event, values = settings_win.read()
         settings_win.close()
         
@@ -3564,12 +3643,7 @@ class MainWindow:
                       expand_x=True, expand_y=True)],
             buttons,
         ]
-        location = None
-        try:
-            location = (window.window.winfo_x() + 60, window.window.winfo_y() + 60)
-        except Exception:
-            pass
-        dlg = eg.Window(tr("update.available_title"), layout, modal=True, location=location, resizable=True)
+        dlg = _place_over(eg.Window(tr("update.available_title"), layout, modal=True, resizable=True), window)
         event, _ = dlg.read()
         dlg.close()
         return {"-UPD_NOW-": "update", "-UPD_PAGE-": "page", "-UPD_SKIP-": "skip"}.get(event)
@@ -3606,10 +3680,7 @@ class MainWindow:
         label = ttk.Label(top, text="")
         label.pack(padx=16, pady=(2, 14), anchor="w")
         try:
-            top.update_idletasks()
-            x = window.window.winfo_x() + (window.window.winfo_width() - top.winfo_width()) // 2
-            y = window.window.winfo_y() + (window.window.winfo_height() - top.winfo_height()) // 2
-            top.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+            _center_over(top, _window_rect(window.window))
         except Exception:
             pass
         self._progress_dialog = (top, bar, label)
@@ -3663,12 +3734,7 @@ class MainWindow:
             [eg.Text(f"https://github.com/{updater.REPO}")],
             [eg.Button(tr("about.open_github"), key="-ABOUT_GITHUB-"), eg.Button(tr("common.close"), key="-ABOUT_CLOSE-")],
         ]
-        location = None
-        try:
-            location = (window.window.winfo_x() + 60, window.window.winfo_y() + 60)
-        except Exception:
-            pass
-        dlg = eg.Window(tr("about.title"), layout, modal=True, location=location)
+        dlg = _place_over(eg.Window(tr("about.title"), layout, modal=True), window)
         event, _ = dlg.read()
         dlg.close()
         if event == "-ABOUT_GITHUB-":
@@ -3717,12 +3783,6 @@ class MainWindow:
             window.events.put(("-ACTION_COMPLETE-", {"action": tr("action.show_profile"), "success": False, "error": str(e)}))
 
     def _show_profile_dialog(self, profile, parent_window):
-        location = None
-        try:
-            location = (parent_window.window.winfo_x() + 50, parent_window.window.winfo_y() + 50)
-        except Exception:
-            pass
-            
         desc = getattr(profile, "description", "") or ""
         followers = getattr(profile, "followers_count", 0)
         follows = getattr(profile, "follows_count", 0)
@@ -3736,7 +3796,7 @@ class MainWindow:
             [eg.Frame(tr("profile.bio"), [[eg.Multiline(desc, size=(50, 8), readonly=True, expand_x=True, font=(self.font_family, self.font_size))]], expand_x=True)],
             [eg.Button(tr("common.close"), key="Close")]
         ]
-        win = eg.Window(tr("profile.title"), layout, modal=True, location=location)
+        win = _place_over(eg.Window(tr("profile.title"), layout, modal=True), parent_window)
         win.read()
         win.close()
 
