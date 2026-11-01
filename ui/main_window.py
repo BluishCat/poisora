@@ -133,6 +133,27 @@ def _monitor_work_area(x, y, w, h):
         return None
 
 
+def _rect_on_screen(x, y, w, h):
+    """矩形がどこかのモニターに重なっているか（外したモニターに保存された位置などを弾く）"""
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        user32.MonitorFromRect.restype = wintypes.HANDLE
+        user32.MonitorFromRect.argtypes = [ctypes.POINTER(wintypes.RECT), wintypes.DWORD]
+        rect = wintypes.RECT(int(x), int(y), int(x + w), int(y + h))
+        return bool(user32.MonitorFromRect(ctypes.byref(rect), 0))  # MONITOR_DEFAULTTONULL
+    except Exception:
+        return True
+
+
+def _empty_timeline_rows():
+    """読み込み済みで投稿が 1 件も無いタブに出す行"""
+    return [[tr("timeline.empty"), "", tr("timeline.empty_hint"), "", 0, 0]]
+
+
 def _window_rect(toplevel):
     """ウィンドウの (x, y, 幅, 高さ)。最小化・非表示などで位置が当てにならなければ None"""
     try:
@@ -1339,6 +1360,22 @@ class MainWindow:
         # Note: In-place modification of the shared 'tabs' list works here
         # since BlueskyApp holds a reference to the same list.
 
+    def _set_refresh_status(self, window, error=None):
+        """タイムライン取得中・失敗をステータスバーに出す。他の表示（操作の成功など）は上書きしない"""
+        try:
+            status = window["-STATUS_BAR-"]
+            current = status.widget.cget("text")
+        except Exception:
+            return
+        refreshing = f" {tr('status.refreshing')}"
+        if error:
+            status.update(f" {tr('status.error', action=tr('menu.refresh'), error=error)}")
+        elif getattr(self, "_refreshes_running", 0) > 0:
+            if current in (refreshing, f" {tr('status.ready')}"):
+                status.update(refreshing)
+        elif current == refreshing:
+            status.update(f" {tr('status.ready')}")
+
     def _make_tab_element(self, tab):
         """タイムライン 1 タブぶんの eg.Tab（中に一覧の CustomTable）を作る"""
         tab_name = tab.name
@@ -1346,8 +1383,9 @@ class MainWindow:
             tab_name = "● " + tab_name
 
         list_items = [self.format_post_for_list(p) for p in tab.posts]
-        if not list_items:
-            list_items = [[tr("timeline.empty"), "", tr("timeline.empty_hint"), "", 0, 0]]
+        if not list_items and tab.tab_key in self._loaded_tabs:
+            # まだ読み込んでいないタブは空のまま（読み込み後に投稿が無ければ案内を出す）
+            list_items = _empty_timeline_rows()
 
         # Use default character-based widths for constructor
         current_col_widths = [13, 12, 40, 19, 6, 6]
@@ -1501,6 +1539,16 @@ class MainWindow:
         window_size = self.ui_settings.get("window_size", (1100, 900))
         window = eg.Window(APP_TITLE, layout, resizable=True, size=window_size,
                            element_padding=(0, 0), enable_key_events=True)
+        # TkEasyGUI は表示した直後に主モニターの中央へ動かすため、そのままだと一度中央に出てから
+        # 保存した位置へ移って見える。表示時の中央寄せを保存した位置への移動に差し替える。
+        saved_pos = self.ui_settings.get("window_pos")
+        try:
+            wx, wy = int(saved_pos[0]), int(saved_pos[1])
+            ww, wh = int(window_size[0]), int(window_size[1])
+        except (TypeError, ValueError, IndexError):
+            wx = wy = None
+        if wx is not None and _rect_on_screen(wx, wy, ww, wh):
+            window.move_to_center = lambda center_pos=None, x=wx, y=wy: window.window.geometry(f"+{x}+{y}")
         
         # Initial read to build widgets
         event, values = window.read(timeout=10)
@@ -1987,11 +2035,7 @@ class MainWindow:
                     # Force geometry update first
                     window.window.update()
 
-                    # 1. Restore window position
-                    if "window_pos" in self.ui_settings:
-                        wx, wy = self.ui_settings["window_pos"]
-                        if -10000 < wx < 10000 and -10000 < wy < 10000:
-                            window.window.geometry(f"+{wx}+{wy}")
+                    # 1. ウィンドウの位置は表示時に適用済み（show_main の eg.Window 作成直後を参照）
                     
                     # 2. Outer Sash position (-MAIN_PANED-)
                     _apply_main_sash(window)
@@ -2437,14 +2481,10 @@ class MainWindow:
                 data = values if isinstance(values, dict) else {}
                 target_tab_key = data.get("tab_key")
                 
-                # Update loading message for specific tab or all
-                target_tabs = [t for t in tabs if t.tab_key == target_tab_key] if target_tab_key else tabs
-                for tab in target_tabs:
-                    table_elem = window[f"-TIMELINE_{tab.tab_key}-"]
-                    if table_elem:
-                        table_elem.update(values=[[tr("timeline.loading"), "", tr("timeline.loading_hint"), "", 0, 0]])
-                        # 行が差し替わったので行IDキャッシュも更新
-                        self._refresh_tree_items(window, tab.tab_key)
+                # 取得中も一覧は今の内容のまま（差し替えると「読み込み中」に一瞬変わって見える）。
+                # 進行中であることはステータスバーで知らせる
+                self._refreshes_running = getattr(self, "_refreshes_running", 0) + 1
+                self._set_refresh_status(window)
                 
                 def _do_refresh(win, tk=target_tab_key):
                     try:
@@ -2457,8 +2497,9 @@ class MainWindow:
                 
             elif event == "-ASYNC_REFRESH_COMPLETE-":
                 data = values if isinstance(values, dict) else {}
+                self._refreshes_running = max(0, getattr(self, "_refreshes_running", 0) - 1)
+                self._set_refresh_status(window, data.get("error"))
                 if "error" in data:
-                    pass; # print("Refresh error:", data["error"])
                     continue
                 updated_tabs = data.get("tabs", tabs)
                 target_tab_key = data.get("tab_key")
@@ -2475,7 +2516,7 @@ class MainWindow:
                 for tab_model in tabs_to_update:
                     list_items = [self.format_post_for_list(p) for p in tab_model.posts]
                     if not list_items:
-                        list_items = [["(No posts yet)", "", "Click Refresh", "", 0, 0]]
+                        list_items = _empty_timeline_rows()
                     
                     table_elem = window[f"-TIMELINE_{tab_model.tab_key}-"]
                     if table_elem:
@@ -2840,7 +2881,7 @@ class MainWindow:
         for t in changed:
             list_items = [self.format_post_for_list(p) for p in t.posts]
             if not list_items:
-                list_items = [["(No posts yet)", "", "Click Refresh", "", 0, 0]]
+                list_items = _empty_timeline_rows()
             table_elem = window[f"-TIMELINE_{t.tab_key}-"]
             if table_elem:
                 table_elem.update(values=list_items)
