@@ -38,6 +38,7 @@ if IS_WINDOWS:
     )
 
 datas = [('sound', 'sound')]  # サウンドファイルを同梱
+datas += [('assets/poisora.png', 'assets')]  # ウィンドウアイコン（utils/app_icon.py）
 binaries = []
 hiddenimports = [
     'atproto', 'atproto_client', 'pydantic', 'pydantic_core', 'typing_extensions',
@@ -91,4 +92,6 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     version=version_info,
+    # exe のアイコン（.ico は Windows 用。assets/ は scripts/gen_icon.py で生成）
+    icon=os.path.join(SPECPATH, 'assets', 'poisora.ico') if IS_WINDOWS else None,
 )
