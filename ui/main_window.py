@@ -19,6 +19,8 @@ from utils.platform_compat import bind_accel, bind_right_click, hook_dropfiles
 from utils import richtext
 from utils import updater
 from utils.app_icon import apply_default_window_icon
+from utils import i18n
+from utils.i18n import tr
 from models.tab import TimelineTabModel
 
 # ウィンドウタイトルの共通部分。ログイン後の統計付きタイトルも同じ前半を使う
@@ -32,15 +34,15 @@ MAX_VIDEO_SECONDS = 10 * 60
 
 # app.bsky.video.defs#jobStatus の state の表示名。未知の状態はそのまま表示する
 VIDEO_STATE_LABELS = {
-    "JOB_STATE_CREATED": "アップロード完了",
-    "JOB_STATE_ENCODING": "エンコード中",
-    "JOB_STATE_ENCODED": "エンコード完了",
-    "JOB_STATE_SCANNING": "検査中",
-    "JOB_STATE_SCANNED": "検査完了",
-    "JOB_STATE_UPLOADING": "保存中",
-    "JOB_STATE_UPLOADED": "保存完了",
-    "JOB_STATE_COMPLETED": "処理完了",
-    "JOB_STATE_FAILED": "処理失敗",
+    "JOB_STATE_CREATED": tr("video.state.created"),
+    "JOB_STATE_ENCODING": tr("video.state.encoding"),
+    "JOB_STATE_ENCODED": tr("video.state.encoded"),
+    "JOB_STATE_SCANNING": tr("video.state.scanning"),
+    "JOB_STATE_SCANNED": tr("video.state.scanned"),
+    "JOB_STATE_UPLOADING": tr("video.state.uploading"),
+    "JOB_STATE_UPLOADED": tr("video.state.uploaded"),
+    "JOB_STATE_COMPLETED": tr("video.state.completed"),
+    "JOB_STATE_FAILED": tr("video.state.failed"),
 }
 
 # 未読ジャンプ長押しの送り間隔。KeyPress/KeyRelease で押下状態を直接見て
@@ -92,14 +94,15 @@ eg.Element.prepare_create = _patched_prepare_create
 # ハッシュタグ履歴の上限件数
 HASHTAG_HISTORY_MAX = 50
 
-# タイムライン一覧の列見出し
-TIMELINE_HEADINGS = ["名前", "返信先", "本文", "日時", "RT", "いいね"]
+# タイムライン一覧の列 ID（Treeview の列名。言語に依らない）と見出し
+TIMELINE_COLUMNS = ["name", "reply_to", "text", "date", "rt", "likes"]
+TIMELINE_HEADINGS = [tr(f"timeline.col.{c}") for c in TIMELINE_COLUMNS]
 
 # 詳細ペインでリンク・メンション・タグに付ける Text タグ名
 FACET_TAGS = {"link": "url", "mention": "mention", "tag": "hashtag"}
 
 # 入力欄からの投稿として扱うアクション名（成功したら入力欄と添付を空にする）
-COMPOSER_ACTIONS = ("ポスト", "返信", "引用")
+COMPOSER_ACTIONS = (tr("action.post"), tr("action.reply"), tr("action.quote"))
 
 
 def _snippet(text, limit):
@@ -276,10 +279,12 @@ class TabReorderer:
 
 class CustomTable(eg.Element):
     """Custom table with visible tree column for avatars."""
-    def __init__(self, values, headings, col_widths=None, key="-TABLE-", **kw):
+    def __init__(self, values, headings, col_widths=None, key="-TABLE-", columns=None, **kw):
         super().__init__("CustomTable", "ttk.Treeview", key, True, **kw)
         self.values = values
         self.headings = headings
+        # Treeview の列 ID。見出し（表示言語で変わる）とは別にして、保存する列順を言語に依らないものにする
+        self.columns = list(columns) if columns else list(headings)
         self.col_widths = col_widths or []
         self.has_children = False
         self._tree = None
@@ -303,7 +308,7 @@ class CustomTable(eg.Element):
         # Inner frame to hold tree and vertical scrollbar above the horizontal scrollbar
         tree_frame = ttk.Frame(container)
         
-        columns = self.headings
+        columns = self.columns
         self._tree = ttk.Treeview(tree_frame, columns=columns, show="tree headings", selectmode="browse")
         
         # Scrollbars
@@ -510,27 +515,27 @@ class MainWindow:
         
     def show_login(self, default_username=""):
         layout = [
-            [eg.Text("Blueskyハンドル名（例：user.bsky.social）：")],
+            [eg.Text(tr("login.handle"))],
             [eg.Input(default_username, key="-HANDLE-")],
-            [eg.Text("アプリパスワード：")],
+            [eg.Text(tr("login.password"))],
             [eg.Input(key="-PASSWORD-", password_char="*")],
-            [eg.Button("ログイン"), eg.Button("キャンセル")]
+            [eg.Button(tr("login.button"), key="-LOGIN-"), eg.Button(tr("common.cancel"), key="-CANCEL-")]
         ]
-        window = eg.Window("Poisora - Blueskyログイン", layout)
+        window = eg.Window(tr("login.title"), layout)
 
         while True:
             event, values = window.read()
-            if event in (eg.WIN_CLOSED, "キャンセル"):
+            if event in (eg.WIN_CLOSED, "-CANCEL-"):
                 window.close()
                 return False, None, None
 
-            if event == "ログイン":
+            if event == "-LOGIN-":
                 username = values["-HANDLE-"]
                 password = values["-PASSWORD-"]
 
                 if not username or not password:
                     import tkinter.messagebox as _mb
-                    _mb.showerror("エラー", "ハンドル名とパスワードを入力してください。", parent=window.window)
+                    _mb.showerror(tr("common.error"), tr("login.missing"), parent=window.window)
                     continue
 
                 success, error_msg = self.login_callback(username, password)
@@ -540,7 +545,7 @@ class MainWindow:
                 else:
                     import tkinter as tk
                     from tkinter import messagebox as _mb
-                    _mb.showerror("ログインエラー", f"ログインに失敗しました：{error_msg}", parent=window.window)
+                    _mb.showerror(tr("login.error_title"), tr("login.failed", error=error_msg), parent=window.window)
 
     def _cache_get(self, url):
         """画像キャッシュ参照。ヒット時はLRU順を更新して bytes を返す。未ヒットは None。"""
@@ -658,7 +663,7 @@ class MainWindow:
         if getattr(post, 'quote_author', None):
             body = post.quote_text or ""
             if post.media_from_quote:
-                body += ("\n" if body else "") + ("🎬 動画あり" if post.is_video else "🖼 画像・リンクカードは右の画像欄に表示")
+                body += ("\n" if body else "") + (tr("detail.quote_video") if post.is_video else tr("detail.quote_media"))
             meta = f"❝ {post.quote_author} (@{post.quote_handle})"
             if post.quote_created_at:
                 meta += f" {post.quote_created_at}"
@@ -761,8 +766,8 @@ class MainWindow:
         button = window["-INLINE_POST_HASHTAG-"].widget
         menu = tk.Menu(window.window, tearoff=0)
         if not history:
-            menu.add_command(label="（履歴はまだありません）", state="disabled")
-            menu.add_command(label="ハッシュタグを付けて投稿するか、詳細ペインのタグを開くと増えます", state="disabled")
+            menu.add_command(label=tr("hashtag.history_empty"), state="disabled")
+            menu.add_command(label=tr("hashtag.history_hint"), state="disabled")
         else:
             for tag in history:
                 menu.add_command(label=f"#{tag}", command=lambda t=tag: self._insert_hashtag(window, t))
@@ -771,15 +776,15 @@ class MainWindow:
             for tag in history:
                 remove_menu.add_command(label=f"#{tag}", command=lambda t=tag: self._forget_hashtag(window, t, tabs))
             remove_menu.add_separator()
-            remove_menu.add_command(label="すべて消去…", command=lambda: self._forget_hashtag(window, None, tabs))
-            menu.add_cascade(label="履歴から削除", menu=remove_menu)
+            remove_menu.add_command(label=tr("hashtag.clear_all"), command=lambda: self._forget_hashtag(window, None, tabs))
+            menu.add_cascade(label=tr("hashtag.remove"), menu=remove_menu)
         menu.tk_popup(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
 
     def _forget_hashtag(self, window, tag, tabs):
         """履歴からタグを消す。tag=None なら確認のうえ全部消す"""
         history = self._hashtag_history()
         if tag is None:
-            if not messagebox.askyesno("ハッシュタグの履歴", "履歴をすべて消去しますか？", default="no", parent=window.window):
+            if not messagebox.askyesno(tr("hashtag.history_title"), tr("hashtag.clear_confirm"), default="no", parent=window.window):
                 return
             history.clear()
         else:
@@ -865,12 +870,12 @@ class MainWindow:
     def _image_index_text(self, post, idx):
         """画像欄の上に出す「n / m」等の表示"""
         n = len(post.thumbnail_urls)
-        prefix = "❝ 引用元の" if post.media_from_quote else ""
+        quoted = bool(post.media_from_quote)
         if post.is_video:
-            return f"🎬 {prefix}動画 (ダブルクリックで再生ページを開く)"
+            return tr("image.quote_video") if quoted else tr("image.video")
         if n > 1:
-            return f"{prefix}画像 {idx + 1} / {n}" if prefix else f"{idx + 1} / {n}"
-        return f"{prefix}画像" if prefix else ""
+            return tr("image.quote_index", index=idx + 1, total=n) if quoted else f"{idx + 1} / {n}"
+        return tr("image.quote") if quoted else ""
 
     def _load_detail_images(self, window, post):
         """詳細ペインのアバターとプレビュー画像を反映する。
@@ -1245,7 +1250,7 @@ class MainWindow:
 
         list_items = [self.format_post_for_list(p) for p in tab.posts]
         if not list_items:
-            list_items = [["（投稿なし）", "", "更新してください", "", 0, 0]]
+            list_items = [[tr("timeline.empty"), "", tr("timeline.empty_hint"), "", 0, 0]]
 
         # Use default character-based widths for constructor
         current_col_widths = [13, 12, 40, 19, 6, 6]
@@ -1254,6 +1259,7 @@ class MainWindow:
             [CustomTable(
                 values=list_items,
                 headings=TIMELINE_HEADINGS,
+                columns=TIMELINE_COLUMNS,
                 col_widths=current_col_widths,
                 key=f"-TIMELINE_{tab.tab_key}-",
                 expand_x=True,
@@ -1273,7 +1279,7 @@ class MainWindow:
 
         menu_def = [
             ["File", ["New Post", "Refresh", "---", "Exit"]],
-            ["フィード", ["(読み込み中...)"]],  # Rebuilt dynamically after window creation
+            [tr("menu.feeds"), [tr("menu.loading")]],  # Rebuilt dynamically after window creation
             ["Account", ["Change Account"]],
             ["Settings", ["Options"]]
         ]
@@ -1288,9 +1294,9 @@ class MainWindow:
                             [eg.TabGroup(tab_layouts, key="-TABGROUP-", expand_x=True, expand_y=True)],
                             # プレビューパネルを上段に定義 (場所を取らないようにしつつ、placeで浮遊表示)
                             [eg.Column([
-                                [eg.Frame(" プレビュー (編集中) ", [
+                                [eg.Frame(f" {tr('composer.preview')} ", [
                                     [eg.Image(data=None, key="-INLINE_POST_BIG_PREVIEW-", size=(250, 200), background_color="black")],
-                                    [eg.Text("代替テキスト(ALT):", font=("sans-serif", 9))],
+                                    [eg.Text(tr("composer.alt"), font=("sans-serif", 9))],
                                     [eg.Input("", key="-INLINE_POST_ALT_TEXT-", font=("sans-serif", 10), expand_x=True, enable_events=True)],
                                     [eg.HSeparator()],
                                     [eg.Column([[
@@ -1299,7 +1305,7 @@ class MainWindow:
                                             [eg.Button("×", key=f"-INLINE_POST_REMOVE_{i}-", size=(3, 1), font=("sans-serif", 7))]
                                         ], key=f"-INLINE_POST_SLOT_{i}-", pad=(2, 2)) for i in range(4)
                                     ]], key="-INLINE_POST_THUMB_ROW-", expand_x=True)],
-                                    [eg.Button("閉じる", key="-INLINE_POST_CLOSE_PREVIEW-", size=(10, 1))]
+                                    [eg.Button(tr("common.close"), key="-INLINE_POST_CLOSE_PREVIEW-", size=(10, 1))]
                                 ], relief="raised", borderwidth=3, background_color="#f0f0f0")]
                             ], key="-INLINE_POST_OVERLAY-", visible=True)]
                         ], expand_x=True, expand_y=True)
@@ -1310,7 +1316,7 @@ class MainWindow:
                                 # 下段左側: 詳細情報 & 新規入力 (縦並び)
                                 PanedColumn(
                                     layout1=[[
-                                        eg.Frame(" 投稿詳細 ", [[
+                                        eg.Frame(f" {tr('detail.title')} ", [[
                                             # 左側: アイコン(アバター)のみ
                                             eg.Column([
                                                 [eg.Image(data=None, key="-AUTHOR_AVATAR-", size=(40, 40), background_color="white")]
@@ -1332,24 +1338,24 @@ class MainWindow:
                                         ]], expand_x=True, expand_y=True)
                                     ]],
                                     layout2=[[
-                                        eg.Frame(" 新規ポスト ", [
+                                        eg.Frame(f" {tr('composer.new')} ", [
                                             [
                                                 eg.Text("", key="-INLINE_REPLY_INFO-", font=("sans-serif", 9), text_color="blue", expand_x=True),
-                                                eg.Button("返信をやめる", key="-INLINE_REPLY_CANCEL-", font=("sans-serif", 8))
+                                                eg.Button(tr("composer.cancel_reply"), key="-INLINE_REPLY_CANCEL-", font=("sans-serif", 8))
                                             ],
                                             [
                                                 eg.Multiline("", size=(60, 2), key="-INLINE_POST_TEXT-", expand_x=True, enable_events=True),
                                                 eg.Column([
                                                     [eg.Button("📁", key="-INLINE_POST_ADD_IMAGE-", size=(4, 1)),
                                                      eg.Button("#", key="-INLINE_POST_HASHTAG-", size=(3, 1))],
-                                                    [eg.Button("ポスト", key="-INLINE_POST_BTN-", size=(8, 1))]
+                                                    [eg.Button(tr("action.post"), key="-INLINE_POST_BTN-", size=(8, 1))]
                                                 ], vertical_alignment="top")
                                             ],
                                             [
                                                 eg.Column([
                                                     [
-                                                        eg.Text("0枚", key="-INLINE_POST_IMAGE_INFO-", font=("sans-serif", 9), text_color="gray"),
-                                                        eg.Button("クリア", key="-INLINE_POST_CLEAR_IMAGE-", size=(6, 1))
+                                                        eg.Text(tr("composer.image_count", count=0), key="-INLINE_POST_IMAGE_INFO-", font=("sans-serif", 9), text_color="gray"),
+                                                        eg.Button(tr("common.clear"), key="-INLINE_POST_CLEAR_IMAGE-", size=(6, 1))
                                                     ]
                                                 ], text_align="right", expand_x=True),
                                                 eg.Text("0/300", key="-INLINE_POST_CHAR_COUNT-", font=("sans-serif", 9), text_color="gray")
@@ -1367,7 +1373,7 @@ class MainWindow:
                             ]],
                             layout2=[[
                                 # 下段右側: 詳細画像
-                                eg.Frame(" 画像 ", [[
+                                eg.Frame(f" {tr('image.title')} ", [[
                                     eg.Column([
                                         [eg.Text("", key="-IMAGE_INDEX-", font=("sans-serif", 9), text_color="gray")],
                                         [eg.Image(key="-IMAGE-", size=(400, 400), background_color="black", expand_x=True, expand_y=True)]
@@ -1391,7 +1397,7 @@ class MainWindow:
                 )
             ],
             [
-                eg.Text(" 準備完了", key="-STATUS_BAR-", expand_x=True, relief="sunken", anchor="w", font=("sans-serif", 9))
+                eg.Text(f" {tr('status.ready')}", key="-STATUS_BAR-", expand_x=True, relief="sunken", anchor="w", font=("sans-serif", 9))
             ]
         ]
         
@@ -1413,7 +1419,7 @@ class MainWindow:
                         followers = getattr(p, "followers_count", 0)
                         posts = getattr(p, "posts_count", 0)
                         # disp_name = getattr(p, "display_name", p.handle) or p.handle
-                        new_title = f"{APP_TITLE} - @{p.handle} [ フォロー: {follows} | フォロワー: {followers} | ポスト: {posts} ]"
+                        new_title = f"{APP_TITLE} - @{p.handle} [ {tr('title.stats', follows=follows, followers=followers, posts=posts)} ]"
                         window.events.put(("-UPDATE_TITLE-", {"title": new_title}))
             except Exception:
                 pass
@@ -1775,7 +1781,7 @@ class MainWindow:
                         if self._app_ref and hasattr(self._app_ref, "is_own_post") and self._app_ref.is_own_post(post):
                             window.events.put(("-ACTION_DELETE-", {"post": post}))
                         else:
-                            window["-STATUS_BAR-"].update(" 削除できるのは自分のポストだけです")
+                            window["-STATUS_BAR-"].update(f" {tr('status.delete_own_only')}")
                         return "break"
                     return on_delete
 
@@ -1847,7 +1853,7 @@ class MainWindow:
                 target = _facet_at(event)
                 if target:
                     kind, value = target
-                    label = {"link": "🔗 ", "mention": "👤 プロフィールを開く: ", "tag": "# タグのタブを開く: #"}[kind]
+                    label = {"link": "🔗 ", "mention": tr("facet.mention"), "tag": tr("facet.tag")}[kind]
                     status = window["-STATUS_BAR-"]
                     if hover["saved"] is None:
                         hover["saved"] = status.widget.cget("text")
@@ -2158,14 +2164,14 @@ class MainWindow:
                                         self._refresh_feed_menu_entries(tabs, all_tabs_in_session, window)
                                 
                                 if target_tab.tab_type == "feed":
-                                    menu.add_command(label="フィードを削除", command=lambda t=target_tab: hide_tab(t))
+                                    menu.add_command(label=tr("tabmenu.remove_feed"), command=lambda t=target_tab: hide_tab(t))
                                     menu.add_separator()
                                 elif target_tab.tab_type == "hashtag":
-                                    menu.add_command(label="タブを閉じる",
+                                    menu.add_command(label=tr("tabmenu.close_tab"),
                                                      command=lambda t=target_tab: self._close_hashtag_tab(window, t, tabs, all_tabs_in_session))
                                     menu.add_separator()
                                 
-                                menu.add_command(label="（サウンドなし）", command=lambda t=target_tab: set_sound(t, None))
+                                menu.add_command(label=tr("tabmenu.no_sound"), command=lambda t=target_tab: set_sound(t, None))
                                 menu.add_separator()
                                 
                                 sound_dir = get_resource_path("sound")
@@ -2179,7 +2185,7 @@ class MainWindow:
                                         prefix = "✓ " if target_tab.sound_file == s else "  "
                                         menu.add_command(label=prefix + s, command=lambda t=target_tab, sf=s: set_sound(t, sf))
                                 else:
-                                    menu.add_command(label="sound/フォルダにサウンドファイルがありません", state="disabled")
+                                    menu.add_command(label=tr("tabmenu.no_sound_files"), state="disabled")
                                 
                                 # Show popup
                                 menu.tk_popup(x_root, y_root)
@@ -2339,7 +2345,7 @@ class MainWindow:
                 for tab in target_tabs:
                     table_elem = window[f"-TIMELINE_{tab.tab_key}-"]
                     if table_elem:
-                        table_elem.update(values=[["（読み込み中…）", "", "投稿を取得しています…", "", 0, 0]])
+                        table_elem.update(values=[[tr("timeline.loading"), "", tr("timeline.loading_hint"), "", 0, 0]])
                         # 行が差し替わったので行IDキャッシュも更新
                         self._refresh_tree_items(window, tab.tab_key)
                 
@@ -2387,15 +2393,15 @@ class MainWindow:
                 if post and post.can_reply:
                     self._set_reply_target(window, post)
                 elif post:
-                    reason = "返信できない設定のポストです" if post.is_post else "いいね・リポスト等の通知です"
-                    window["-STATUS_BAR-"].update(f" このポストには返信できません（{reason}）")
+                    reason = tr("reason.reply_disabled") if post.is_post else tr("reason.notification")
+                    window["-STATUS_BAR-"].update(f" {tr('status.cannot_reply', reason=reason)}")
             elif event == "-ACTION_QUOTE-":
                 post = values.get("post")
                 if post and post.can_quote:
                     self._set_quote_target(window, post)
                 elif post:
-                    reason = "引用できない設定のポストです" if post.is_post else "いいね・リポスト等の通知です"
-                    window["-STATUS_BAR-"].update(f" このポストは引用できません（{reason}）")
+                    reason = tr("reason.quote_disabled") if post.is_post else tr("reason.notification")
+                    window["-STATUS_BAR-"].update(f" {tr('status.cannot_quote', reason=reason)}")
             elif event == "-INLINE_REPLY_CANCEL-":
                 self._clear_composer_mode(window)
             elif event == "-ACTION_DELETE-":
@@ -2403,8 +2409,8 @@ class MainWindow:
                 if post and hasattr(self, "_app_ref") and self._app_ref:
                     import tkinter.messagebox as _mb
                     if _mb.askyesno(
-                        "ポストを削除",
-                        f"このポストを削除しますか？\n\n{_snippet(post.text, 80)}\n\n削除したポストは元に戻せません。",
+                        tr("delete.title"),
+                        tr("delete.confirm", snippet=_snippet(post.text, 80)),
                         icon="warning", default="no", parent=window.window,
                     ):
                         threading.Thread(target=self._do_delete_async, args=(window, post), daemon=True).start()
@@ -2430,11 +2436,11 @@ class MainWindow:
             elif event == "-ACTION_FOLLOW-":
                 author = values.get("author")
                 if author and hasattr(self, "_app_ref") and self._app_ref:
-                    threading.Thread(target=self._do_action_async, args=(window, "フォロー", self._app_ref.handle_follow, author), daemon=True).start()
+                    threading.Thread(target=self._do_action_async, args=(window, tr("action.follow"), self._app_ref.handle_follow, author), daemon=True).start()
             elif event == "-ACTION_UNFOLLOW-":
                 author = values.get("author")
                 if author and hasattr(self, "_app_ref") and self._app_ref:
-                    threading.Thread(target=self._do_action_async, args=(window, "フォロー解除", self._app_ref.handle_unfollow, author), daemon=True).start()
+                    threading.Thread(target=self._do_action_async, args=(window, tr("action.unfollow"), self._app_ref.handle_unfollow, author), daemon=True).start()
             elif event == "-ACTION_SHOW_PROFILE-":
                 author = values.get("author")
                 if author and hasattr(self, "_app_ref") and self._app_ref:
@@ -2460,18 +2466,18 @@ class MainWindow:
                             window["-INLINE_POST_TEXT-"].update("")
                             window["-INLINE_POST_CHAR_COUNT-"].update("0/300", text_color="gray")
                         except Exception: pass
-                    if action in ("返信", "引用"):
+                    if action in (tr("action.reply"), tr("action.quote")):
                         self._clear_composer_mode(window)
                     if status_elem:
-                        status_elem.update(f" 成功: {action}")
+                        status_elem.update(f" {tr('status.success', action=action)}")
                         # action は既定引数で固定する（ループ変数のままだと、5秒の間に別の操作をすると
                         # その操作の「成功」表示を消してしまう）
-                        window.window.after(5000, lambda a=action: status_elem.update(" 準備完了") if status_elem.widget.cget("text") == f" 成功: {a}" else None)
+                        window.window.after(5000, lambda a=action: status_elem.update(f" {tr('status.ready')}") if status_elem.widget.cget("text") == f" {tr('status.success', action=a)}" else None)
                 else:
                     if status_elem:
-                        status_elem.update(f" エラー ({action}): {error}")
+                        status_elem.update(f" {tr('status.error', action=action, error=error)}")
                     import tkinter.messagebox as _mb
-                    _mb.showerror("エラー", f"エラーが発生しました：\n{action}\n{error}", parent=window.window)
+                    _mb.showerror(tr("common.error"), tr("error.occurred", action=action, error=error), parent=window.window)
             elif isinstance(event, str) and event.startswith("-INLINE_POST_THUMB_"):
                 try:
                     idx = int(event.split("_")[-1].strip("-"))
@@ -2501,7 +2507,7 @@ class MainWindow:
                 except Exception:
                     pass
             elif event == "-INLINE_POST_ADD_IMAGE-":
-                files = filedialog.askopenfilenames(filetypes=[("Image/Video files", "*.jpg *.jpeg *.png *.webp *.gif *.mp4")])
+                files = filedialog.askopenfilenames(filetypes=[(tr("composer.filetype_media"), "*.jpg *.jpeg *.png *.webp *.gif *.mp4")])
                 if files:
                     self._add_images_to_list(window, "-INLINE_POST_", list(files))
             elif event == "-INLINE_POST_CLEAR_IMAGE-":
@@ -2532,11 +2538,11 @@ class MainWindow:
                 plain = data_dict.get("-PLAIN_POST-")
                 reply = None if plain else self.reply_target
                 quote = None if plain else self.quote_target
-                action_name = "返信" if reply else "引用" if quote else "ポスト"
+                action_name = tr("action.reply") if reply else tr("action.quote") if quote else tr("action.post")
                 if text and text.strip():
                     if len(text.strip()) > 300:
                         import tkinter.messagebox as _mb
-                        _mb.showwarning("文字数超過", f"300文字以内で入力してください。（現在 {len(text.strip())} 文字）", parent=window.window)
+                        _mb.showwarning(tr("composer.too_long_title"), tr("composer.too_long", count=len(text.strip())), parent=window.window)
                     else:
                         # 動画はエンコード完了まで数分かかるため、UI を止めないよう別スレッドで実行する
                         def on_video_progress(state, progress):
@@ -2566,7 +2572,10 @@ class MainWindow:
                 window.close()
                 return "Logout"
             elif event == "Options":
-                self.show_settings_dialog(window, tabs)
+                if self.show_settings_dialog(window, tabs) == "restart":
+                    self.save_current_ui_state(window, tabs)
+                    window.close()
+                    return "Restart"
             elif event == "Check Update":
                 self._start_update_check(window, manual=True)
             elif event == "About":
@@ -2582,7 +2591,7 @@ class MainWindow:
                 data = values if isinstance(values, dict) else {}
                 self._close_progress_dialog()
                 self._update_busy = False
-                messagebox.showerror("更新", data.get("error") or "更新に失敗しました。", parent=window.window)
+                messagebox.showerror(tr("update.title"), data.get("error") or tr("update.failed"), parent=window.window)
             elif event == "-UPDATE_DOWNLOADED-":
                 data = values if isinstance(values, dict) else {}
                 if self._finish_update(window, data):
@@ -2606,33 +2615,33 @@ class MainWindow:
 
         # ---- ファイル ----
         file_menu = tk.Menu(menubar, tearoff=0)
-        file_menu.add_command(label="新規ポスト", command=lambda: self.show_post_dialog(window))
-        file_menu.add_command(label="更新",       command=lambda: window.dispatch_event("Refresh"))
+        file_menu.add_command(label=tr("menu.new_post"), command=lambda: self.show_post_dialog(window))
+        file_menu.add_command(label=tr("menu.refresh"), command=lambda: window.dispatch_event("Refresh"))
         file_menu.add_separator()
-        file_menu.add_command(label="終了",       command=lambda: window.dispatch_event("Exit"))
-        menubar.add_cascade(label="ファイル", menu=file_menu)
+        file_menu.add_command(label=tr("menu.exit"), command=lambda: window.dispatch_event("Exit"))
+        menubar.add_cascade(label=tr("menu.file"), menu=file_menu)
 
         # ---- フィード (dynamic) ----
         self._feed_menu = tk.Menu(menubar, tearoff=0)
         self._refresh_feed_menu_entries(tabs, all_tabs, window)
-        menubar.add_cascade(label="フィード", menu=self._feed_menu)
+        menubar.add_cascade(label=tr("menu.feeds"), menu=self._feed_menu)
 
         # ---- アカウント ----
         account_menu = tk.Menu(menubar, tearoff=0)
-        account_menu.add_command(label="アカウント切り替え", command=lambda: window.dispatch_event("Change Account"))
-        menubar.add_cascade(label="アカウント", menu=account_menu)
+        account_menu.add_command(label=tr("menu.switch_account"), command=lambda: window.dispatch_event("Change Account"))
+        menubar.add_cascade(label=tr("menu.account"), menu=account_menu)
 
         # ---- 設定 ----
         settings_menu = tk.Menu(menubar, tearoff=0)
-        settings_menu.add_command(label="オプション", command=lambda: window.dispatch_event("Options"))
-        menubar.add_cascade(label="設定", menu=settings_menu)
+        settings_menu.add_command(label=tr("menu.options"), command=lambda: window.dispatch_event("Options"))
+        menubar.add_cascade(label=tr("menu.settings"), menu=settings_menu)
 
         # ---- ヘルプ ----
         help_menu = tk.Menu(menubar, tearoff=0)
-        help_menu.add_command(label="更新の確認",     command=lambda: window.dispatch_event("Check Update"))
+        help_menu.add_command(label=tr("menu.check_update"), command=lambda: window.dispatch_event("Check Update"))
         help_menu.add_separator()
-        help_menu.add_command(label="バージョン情報", command=lambda: window.dispatch_event("About"))
-        menubar.add_cascade(label="ヘルプ", menu=help_menu)
+        help_menu.add_command(label=tr("menu.about"), command=lambda: window.dispatch_event("About"))
+        menubar.add_cascade(label=tr("menu.help"), menu=help_menu)
 
         root.config(menu=menubar)
 
@@ -2714,7 +2723,7 @@ class MainWindow:
             success, err = False, str(e)
         if success:
             window.events.put(("-POST_DELETED-", {"post": post}))
-        window.events.put(("-ACTION_COMPLETE-", {"action": "削除", "success": success, "error": err}))
+        window.events.put(("-ACTION_COMPLETE-", {"action": tr("action.delete"), "success": success, "error": err}))
 
     def _remove_post_from_tabs(self, window, post, tabs, all_tabs):
         """削除したポストを全タブから取り除いて一覧を描き直す
@@ -2751,7 +2760,7 @@ class MainWindow:
             # 詳細ペインは残すが、削除済みのポストへ返信・削除などができないよう選択を外す
             self.current_selected_post = None
             try:
-                window["-DETAIL_DATE-"].update(f"{post.created_at}（削除済み）")
+                window["-DETAIL_DATE-"].update(tr("detail.deleted", date=post.created_at))
             except Exception:
                 pass
 
@@ -2798,23 +2807,23 @@ class MainWindow:
         reply, quote = self.reply_target, self.quote_target
         lines = []
         if reply:
-            lines.append(f"↩ {reply.author_display_name} (@{reply.author_handle}) に返信: {_snippet(reply.text, 40)}")
+            lines.append(tr("composer.replying_to", name=reply.author_display_name, handle=reply.author_handle, snippet=_snippet(reply.text, 40)))
         if quote:
-            lines.append(f"❝ {quote.author_display_name} (@{quote.author_handle}) を引用: {_snippet(quote.text, 40)}")
+            lines.append(tr("composer.quoting", name=quote.author_display_name, handle=quote.author_handle, snippet=_snippet(quote.text, 40)))
         if reply and quote:
-            title, cancel = " 返信（引用付き） ", "返信・引用をやめる"
+            title, cancel = tr("composer.reply_with_quote"), tr("composer.cancel_both")
         elif reply:
-            title, cancel = " 返信 ", "返信をやめる"
+            title, cancel = tr("composer.reply"), tr("composer.cancel_reply")
         elif quote:
-            title, cancel = " 引用ポスト ", "引用をやめる"
+            title, cancel = tr("composer.quote"), tr("composer.cancel_quote")
         else:
-            title, cancel = " 新規ポスト ", "返信をやめる"
+            title, cancel = tr("composer.new"), tr("composer.cancel_reply")
         try:
             window["-INLINE_REPLY_INFO-"].update("\n".join(lines))
             self._show_reply_row(window, bool(lines))
             window["-INLINE_REPLY_CANCEL-"].widget.configure(text=cancel)
-            window["-INLINE_POST_BTN-"].widget.configure(text="返信" if reply else "ポスト")
-            window["-INLINE_POST_FRAME-"].widget.configure(text=title)
+            window["-INLINE_POST_BTN-"].widget.configure(text=tr("action.reply") if reply else tr("action.post"))
+            window["-INLINE_POST_FRAME-"].widget.configure(text=f" {title} ")
             if focus:
                 window["-INLINE_POST_TEXT-"].widget.focus_set()
         except Exception:
@@ -2823,10 +2832,10 @@ class MainWindow:
     def _do_toggle_async(self, window, kind, post):
         """お気に入り / リポストの付け外し（今の状態の逆にする）"""
         if kind == "like":
-            action = "お気に入り解除" if post.viewer_like_uri else "お気に入り"
+            action = tr("action.unlike") if post.viewer_like_uri else tr("action.like")
             func = self._app_ref.handle_like
         else:
-            action = "リポスト取り消し" if post.viewer_repost_uri else "リポスト"
+            action = tr("action.unrepost") if post.viewer_repost_uri else tr("action.repost")
             func = self._app_ref.handle_repost
         try:
             success, err = func(post)
@@ -2883,7 +2892,7 @@ class MainWindow:
             # For now, just save state.
             self.save_current_ui_state(window, []) # Tabs list can be empty for just saving other fields
         except Exception as e:
-            window.events.put(("-ACTION_COMPLETE-", {"action": "ブックマーク", "success": False, "error": str(e)}))
+            window.events.put(("-ACTION_COMPLETE-", {"action": tr("action.bookmark"), "success": False, "error": str(e)}))
 
     def show_post_context_menu(self, window, tab, row_idx, x_root, y_root):
         post = tab.posts[row_idx]
@@ -2896,14 +2905,14 @@ class MainWindow:
     def _show_context_menu(self, window, post, x_root, y_root):
         import tkinter as tk
         menu = tk.Menu(window.window, tearoff=0)
-        menu.add_command(label="返信 (Ctrl+R)", command=lambda: window.dispatch_event("-ACTION_REPLY-", {"post": post}),
+        menu.add_command(label=tr("postmenu.reply"), command=lambda: window.dispatch_event("-ACTION_REPLY-", {"post": post}),
                          state="normal" if post.can_reply else "disabled")
-        menu.add_command(label="引用", command=lambda: window.dispatch_event("-ACTION_QUOTE-", {"post": post}),
+        menu.add_command(label=tr("action.quote"), command=lambda: window.dispatch_event("-ACTION_QUOTE-", {"post": post}),
                          state="normal" if post.can_quote else "disabled")
         menu.add_separator()
-        menu.add_command(label="リポスト取り消し" if post.viewer_repost_uri else "リポスト",
+        menu.add_command(label=tr("action.unrepost") if post.viewer_repost_uri else tr("action.repost"),
                          command=lambda: window.dispatch_event("-ACTION_REPOST-", {"post": post}))
-        menu.add_command(label="お気に入り解除" if post.viewer_like_uri else "お気に入り",
+        menu.add_command(label=tr("action.unlike") if post.viewer_like_uri else tr("action.like"),
                          command=lambda: window.dispatch_event("-ACTION_LIKE-", {"post": post}))
         
         # Check if already bookmarked
@@ -2911,17 +2920,17 @@ class MainWindow:
         if hasattr(self, "_app_ref") and self._app_ref:
             is_bookmarked = post.uri in getattr(self._app_ref, "bookmarked_uris", set())
         
-        bm_label = "ブックマーク解除" if is_bookmarked else "ブックマーク"
+        bm_label = tr("action.unbookmark") if is_bookmarked else tr("action.bookmark")
         menu.add_command(label=bm_label, command=lambda: window.dispatch_event("-ACTION_BOOKMARK-", {"post": post}))
 
         menu.add_separator()
-        menu.add_command(label="プロフィールを表示", command=lambda: window.dispatch_event("-ACTION_SHOW_PROFILE-", {"author": post.author_handle}))
-        menu.add_command(label=f"@{post.author_handle} をフォロー", command=lambda: window.dispatch_event("-ACTION_FOLLOW-", {"author": post.author_handle}))
-        menu.add_command(label=f"@{post.author_handle} のフォロー解除", command=lambda: window.dispatch_event("-ACTION_UNFOLLOW-", {"author": post.author_handle}))
+        menu.add_command(label=tr("postmenu.show_profile"), command=lambda: window.dispatch_event("-ACTION_SHOW_PROFILE-", {"author": post.author_handle}))
+        menu.add_command(label=tr("postmenu.follow", handle=post.author_handle), command=lambda: window.dispatch_event("-ACTION_FOLLOW-", {"author": post.author_handle}))
+        menu.add_command(label=tr("postmenu.unfollow", handle=post.author_handle), command=lambda: window.dispatch_event("-ACTION_UNFOLLOW-", {"author": post.author_handle}))
 
         if self._app_ref and hasattr(self._app_ref, "is_own_post") and self._app_ref.is_own_post(post):
             menu.add_separator()
-            menu.add_command(label="ポストを削除… (Delete)", command=lambda: window.dispatch_event("-ACTION_DELETE-", {"post": post}))
+            menu.add_command(label=tr("postmenu.delete"), command=lambda: window.dispatch_event("-ACTION_DELETE-", {"post": post}))
         menu.tk_popup(x_root, y_root)
 
     def save_current_ui_state(self, window, tabs):
@@ -3012,6 +3021,7 @@ class MainWindow:
             state["font_size"] = self.font_size
             state["auto_refresh"] = self.ui_settings.get("auto_refresh", 0)
             state["auto_update_check"] = self.ui_settings.get("auto_update_check", True)
+            state["language"] = self.ui_settings.get("language", i18n.AUTO)
             if self.ui_settings.get("skipped_update_version"):
                 state["skipped_update_version"] = self.ui_settings["skipped_update_version"]
             
@@ -3087,13 +3097,13 @@ class MainWindow:
         """動画を添付する。動画は1本のみで、画像とは排他"""
         size = os.path.getsize(path)
         if size > MAX_VIDEO_BYTES:
-            messagebox.showwarning("制限", f"動画は300MBまでです。（このファイルは {size / 1000 / 1000:.0f}MB）")
+            messagebox.showwarning(tr("limit.title"), tr("limit.video_size", size=f"{size / 1000 / 1000:.0f}"))
             return
 
         # 断片化 mp4 では長さが読めない。その場合の判定はサーバー側に任せる
         info = read_video_info(path)
         if info and info["duration_sec"] and info["duration_sec"] > MAX_VIDEO_SECONDS:
-            messagebox.showwarning("制限", f"動画は10分までです。（このファイルは {info['duration_sec'] / 60:.1f}分）")
+            messagebox.showwarning(tr("limit.title"), tr("limit.video_length", minutes=f"{info['duration_sec'] / 60:.1f}"))
             return
 
         video = {"path": path, "info": info, "alt": ""}
@@ -3118,7 +3128,7 @@ class MainWindow:
         print(f"[DEBUG DND] adding images to list: {new_images}", flush=True)
         for img in new_images:
             if len(current_images) >= 4:
-                messagebox.showwarning("制限", "画像は最大4枚までです。")
+                messagebox.showwarning(tr("limit.title"), tr("limit.images"))
                 break
             
             # Wrap image in data object with alt text
@@ -3277,7 +3287,7 @@ class MainWindow:
         
         # テキスト情報と一括クリアボタンの更新
         try:
-            label = f"🎬 {os.path.basename(video['path'])}" if video else f"{count}枚"
+            label = f"🎬 {os.path.basename(video['path'])}" if video else tr("composer.image_count", count=count)
             window[info_key].update(label)
             _set_elem_visible(window[clear_key], count > 0 or bool(video))
         except Exception: pass
@@ -3293,13 +3303,13 @@ class MainWindow:
         self._dialog_video = None
         
         layout = [
-            [eg.Text("今なに考えてる？")],
+            [eg.Text(tr("postdlg.prompt"))],
             [
                 eg.Multiline(size=(40, 5), key="-TEXT-", expand_x=True, expand_y=True),
                 eg.Column([
-                    [eg.Button("📁 画像追加", key="-ADD_IMAGE-", size=(12, 1))],
-                    [eg.Button("ポスト", key="ポスト", size=(12, 2))],
-                    [eg.Button("キャンセル", size=(12, 1))]
+                    [eg.Button(tr("postdlg.add_image"), key="-ADD_IMAGE-", size=(12, 1))],
+                    [eg.Button(tr("action.post"), key="-DIALOG_POST-", size=(12, 2))],
+                    [eg.Button(tr("common.cancel"), key="-CANCEL-", size=(12, 1))]
                 ])
             ],
             [
@@ -3311,12 +3321,12 @@ class MainWindow:
                     ], key=f"-DIAL_SLOT_{i}-", pad=(2, 2)) for i in range(4)
                 ]], key="-DIAL_THUMB_ROW-", expand_x=True),
                 eg.Column([
-                    [eg.Text("0枚", key="-IMAGE_INFO-", font=("sans-serif", 9), text_color="gray")],
-                    [eg.Button("クリア", key="-CLEAR_IMAGE-", size=(6, 1))]
+                    [eg.Text(tr("composer.image_count", count=0), key="-IMAGE_INFO-", font=("sans-serif", 9), text_color="gray")],
+                    [eg.Button(tr("common.clear"), key="-CLEAR_IMAGE-", size=(6, 1))]
                 ], text_align="right")
             ]
         ]
-        window = eg.Window("新規ポスト", layout, resizable=True, location=location)
+        window = eg.Window(tr("postdlg.title"), layout, resizable=True, location=location)
         self._active_dialog_window = window
         
         # Hide initially
@@ -3325,7 +3335,7 @@ class MainWindow:
         for i in range(4):
             _set_elem_visible(window[f"-DIAL_SLOT_{i}-"], False)
         def submit_post(e):
-            window.events.put(("ポスト", {"-TEXT-": window["-TEXT-"].get()}))
+            window.events.put(("-DIALOG_POST-", {"-TEXT-": window["-TEXT-"].get()}))
             return "break"
         
         # Bind Ctrl+V
@@ -3349,11 +3359,11 @@ class MainWindow:
 
         while True:
             event, values = window.read()
-            if event in (None, "キャンセル"):
+            if event in (None, "-CANCEL-"):
                 break
             
             if event == "-ADD_IMAGE-":
-                files = filedialog.askopenfilenames(filetypes=[("Image/Video files", "*.jpg *.jpeg *.png *.webp *.gif *.mp4")])
+                files = filedialog.askopenfilenames(filetypes=[(tr("composer.filetype_media"), "*.jpg *.jpeg *.png *.webp *.gif *.mp4")])
                 if files:
                     self._add_images_to_list(window, "-", list(files))
             
@@ -3371,7 +3381,7 @@ class MainWindow:
                 except Exception:
                     pass
                 
-            if event == "ポスト":
+            if event == "-DIALOG_POST-":
                 data_dict = values if isinstance(values, dict) else {}
                 text = data_dict.get("-TEXT-")
                 if text and text.strip():
@@ -3397,20 +3407,33 @@ class MainWindow:
         families = sorted([f for f in tkfont.families() if f and not f.startswith("@")])
         sizes = [8, 9, 10, 11, 12, 13, 14, 16, 18, 20]
         
-        refresh_options = {"無効": 0, "1分": 1, "3分": 3, "5分": 5, "10分": 10, "15分": 15, "30分": 30}
+        refresh_options = {tr("settings.refresh_off"): 0}
+        for n in (1, 3, 5, 10, 15, 30):
+            refresh_options[tr("settings.minutes", n=n)] = n
         current_refresh_val = self.ui_settings.get("auto_refresh", 0)
-        current_refresh_str = next((k for k, v in refresh_options.items() if v == current_refresh_val), "無効")
-        
+        current_refresh_str = next((k for k, v in refresh_options.items() if v == current_refresh_val), tr("settings.refresh_off"))
+
+        # 言語: 「システムに合わせる (今の OS の言語名)」＋ locales/*.json の各言語
+        languages = i18n.available_languages()
+        auto_code = i18n.resolve(i18n.AUTO)
+        language_options = {tr("settings.language_auto", name=languages.get(auto_code, auto_code)): i18n.AUTO}
+        for code, name in languages.items():
+            language_options[name] = code
+        current_language = self.ui_settings.get("language", i18n.AUTO)
+        current_language_str = next((k for k, v in language_options.items() if v == current_language),
+                                    next(iter(language_options)))
+
         layout = [
-            [eg.Text("表示フォントの設定")],
-            [eg.Text("フォント名:"), eg.Combo(families, default_value=self.font_family, key="-FONT_FAMILY-", expand_x=True)],
-            [eg.Text("サイズ:"), eg.Combo(sizes, default_value=self.font_size, key="-FONT_SIZE-", readonly=True)],
-            [eg.Text("タイムライン自動更新(分):"), eg.Combo(list(refresh_options.keys()), default_value=current_refresh_str, key="-AUTO_REFRESH-", readonly=True)],
-            [eg.Checkbox("起動時に新しいバージョンを確認する", default=bool(self.ui_settings.get("auto_update_check", True)), key="-AUTO_UPDATE_CHECK-")],
-            [eg.Button("保存", key="-SAVE_SETTINGS-"), eg.Button("キャンセル")]
+            [eg.Text(tr("settings.font"))],
+            [eg.Text(tr("settings.font_name")), eg.Combo(families, default_value=self.font_family, key="-FONT_FAMILY-", expand_x=True)],
+            [eg.Text(tr("settings.font_size")), eg.Combo(sizes, default_value=self.font_size, key="-FONT_SIZE-", readonly=True)],
+            [eg.Text(tr("settings.auto_refresh")), eg.Combo(list(refresh_options.keys()), default_value=current_refresh_str, key="-AUTO_REFRESH-", readonly=True)],
+            [eg.Checkbox(tr("settings.auto_update_check"), default=bool(self.ui_settings.get("auto_update_check", True)), key="-AUTO_UPDATE_CHECK-")],
+            [eg.Text(tr("settings.language")), eg.Combo(list(language_options.keys()), default_value=current_language_str, key="-LANGUAGE-", readonly=True)],
+            [eg.Button(tr("common.save"), key="-SAVE_SETTINGS-"), eg.Button(tr("common.cancel"), key="-CANCEL-")]
         ]
         
-        settings_win = eg.Window("設定", layout, modal=True, location=location)
+        settings_win = eg.Window(tr("settings.title"), layout, modal=True, location=location)
         
         # TkEasyGUI は初回の read() 時に中央寄せなどの自動配置を行う場合があるため、
         # 一度非表示のまま（または一瞬だけ）読んでから位置を明示的に上書きします。
@@ -3435,6 +3458,10 @@ class MainWindow:
                 self.ui_settings["auto_refresh"] = refresh_options[values["-AUTO_REFRESH-"]]
             if "-AUTO_UPDATE_CHECK-" in values:
                 self.ui_settings["auto_update_check"] = bool(values["-AUTO_UPDATE_CHECK-"])
+            new_language = language_options.get(values.get("-LANGUAGE-"), current_language)
+            self.ui_settings["language"] = new_language
+            # 表示中の言語と変わるときだけ再起動を勧める（auto のまま等は何もしない）
+            language_changed = i18n.resolve(new_language) != i18n.current_language()
             
             # Save settings
             self.save_current_ui_state(parent_window, tabs)
@@ -3444,7 +3471,17 @@ class MainWindow:
             self.apply_unread_tags(parent_window, tabs)
             self._update_ui_fonts(parent_window)
             import tkinter.messagebox as _mb
-            _mb.showinfo("設定", "設定を保存しました。", parent=parent_window.window)
+            if language_changed:
+                msg = tr("settings.restart_confirm")
+                try:
+                    if parent_window["-INLINE_POST_TEXT-"].get().strip():
+                        msg += "\n\n" + tr("common.draft_discarded")
+                except Exception:
+                    pass
+                if _mb.askyesno(tr("settings.title"), msg, parent=parent_window.window):
+                    return "restart"
+            else:
+                _mb.showinfo(tr("settings.title"), tr("settings.saved"), parent=parent_window.window)
 
     # ---------------- 更新の確認・自己更新 ----------------
 
@@ -3452,7 +3489,7 @@ class MainWindow:
         """GitHub の最新リリースをバックグラウンドで確認する。結果は -UPDATE_CHECK_RESULT- で届く。"""
         if getattr(self, "_update_busy", False):
             if manual:
-                messagebox.showinfo("更新の確認", "更新の確認・ダウンロードを実行中です。", parent=window.window)
+                messagebox.showinfo(tr("update.check_title"), tr("update.busy"), parent=window.window)
             return
         self._update_busy = True
 
@@ -3472,14 +3509,14 @@ class MainWindow:
         if not info:
             self._update_busy = False
             if manual:
-                messagebox.showerror("更新の確認", data.get("error") or "更新を確認できませんでした。", parent=window.window)
+                messagebox.showerror(tr("update.check_title"), data.get("error") or tr("update.check_failed"), parent=window.window)
             return False
 
         latest = info.get("version") or ""
         if not updater.is_newer(latest):
             self._update_busy = False
             if manual:
-                messagebox.showinfo("更新の確認", f"お使いのバージョン (v{__version__}) は最新です。", parent=window.window)
+                messagebox.showinfo(tr("update.check_title"), tr("update.up_to_date", version=__version__), parent=window.window)
             return False
 
         # 自動確認では「このバージョンをスキップ」したものは通知しない
@@ -3502,26 +3539,26 @@ class MainWindow:
         """新しいバージョンの案内。戻り値: "update" / "page" / "skip" / None(後で)"""
         can_update = updater.can_self_update() and bool(info.get("asset_url")) and bool(info.get("sha256"))
         size_mb = (info.get("asset_size") or 0) / (1000 * 1000)
-        lines = [f"新しいバージョン v{info.get('version')} が公開されています。（現在: v{__version__}）"]
+        lines = [tr("update.available", latest=info.get("version"), current=__version__)]
         if can_update:
-            lines.append(f"「今すぐ更新」でダウンロード（約 {size_mb:.0f} MB）して置き換え、再起動します。")
-            lines.append("設定・ログイン情報・サウンドはそのまま引き継がれます。")
+            lines.append(tr("update.will_download", size=f"{size_mb:.0f}"))
+            lines.append(tr("update.keeps_settings"))
         elif not updater.can_self_update():
-            lines.append("ソースから実行しているため自動更新はできません。git pull などで更新してください。")
+            lines.append(tr("update.from_source"))
         else:
-            lines.append("このリリースは自動更新に対応していません。リリースページから更新してください。")
+            lines.append(tr("update.no_auto"))
 
         buttons = []
         if can_update:
-            buttons.append(eg.Button("今すぐ更新", key="-UPD_NOW-"))
-        buttons.append(eg.Button("リリースページを開く", key="-UPD_PAGE-"))
+            buttons.append(eg.Button(tr("update.now"), key="-UPD_NOW-"))
+        buttons.append(eg.Button(tr("update.open_page"), key="-UPD_PAGE-"))
         if not manual:
-            buttons.append(eg.Button("このバージョンをスキップ", key="-UPD_SKIP-"))
-        buttons.append(eg.Button("後で", key="-UPD_LATER-"))
+            buttons.append(eg.Button(tr("update.skip"), key="-UPD_SKIP-"))
+        buttons.append(eg.Button(tr("update.later"), key="-UPD_LATER-"))
 
         layout = [
             [eg.Text("\n".join(lines))],
-            [eg.Frame("変更内容", [[eg.Multiline(info.get("body") or "(リリースノートはありません)",
+            [eg.Frame(tr("update.changes"), [[eg.Multiline(info.get("body") or tr("update.no_notes"),
                                                 size=(70, 14), readonly=True, expand_x=True, expand_y=True,
                                                 font=(self.font_family, self.font_size))]],
                       expand_x=True, expand_y=True)],
@@ -3532,7 +3569,7 @@ class MainWindow:
             location = (window.window.winfo_x() + 60, window.window.winfo_y() + 60)
         except Exception:
             pass
-        dlg = eg.Window("更新があります", layout, modal=True, location=location, resizable=True)
+        dlg = eg.Window(tr("update.available_title"), layout, modal=True, location=location, resizable=True)
         event, _ = dlg.read()
         dlg.close()
         return {"-UPD_NOW-": "update", "-UPD_PAGE-": "page", "-UPD_SKIP-": "skip"}.get(event)
@@ -3559,11 +3596,11 @@ class MainWindow:
     def _open_progress_dialog(self, window, version):
         self._close_progress_dialog()
         top = tk.Toplevel(window.window)
-        top.title("更新")
+        top.title(tr("update.title"))
         top.transient(window.window)
         top.resizable(False, False)
         top.protocol("WM_DELETE_WINDOW", lambda: None)  # ダウンロード中は閉じさせない
-        ttk.Label(top, text=f"v{version} をダウンロードしています…").pack(padx=16, pady=(14, 6), anchor="w")
+        ttk.Label(top, text=tr("update.downloading", version=version)).pack(padx=16, pady=(14, 6), anchor="w")
         bar = ttk.Progressbar(top, length=320, mode="determinate", maximum=100)
         bar.pack(padx=16, pady=4)
         label = ttk.Label(top, text="")
@@ -3607,31 +3644,31 @@ class MainWindow:
         try:
             updater.apply_update(data.get("path"))
         except Exception as e:
-            messagebox.showerror("更新", str(e), parent=window.window)
+            messagebox.showerror(tr("update.title"), str(e), parent=window.window)
             return False
 
-        msg = f"v{data.get('version')} に更新しました。今すぐ再起動しますか？\n「いいえ」を選ぶと、次回の起動から新しいバージョンになります。"
+        msg = tr("update.restart_confirm", version=data.get("version"))
         try:
             draft = window["-INLINE_POST_TEXT-"].get().strip()
         except Exception:
             draft = ""
         if draft:
-            msg += "\n\n※入力中のポストは破棄されます。"
-        return messagebox.askyesno("更新", msg, parent=window.window)
+            msg += "\n\n" + tr("common.draft_discarded")
+        return messagebox.askyesno(tr("update.title"), msg, parent=window.window)
 
     def _show_about_dialog(self, window):
         layout = [
             [eg.Text(f"Poisora v{__version__}", font=(self.font_family, self.font_size + 4, "bold"))],
-            [eg.Text("Bluesky クライアント")],
+            [eg.Text(tr("about.subtitle"))],
             [eg.Text(f"https://github.com/{updater.REPO}")],
-            [eg.Button("GitHub を開く", key="-ABOUT_GITHUB-"), eg.Button("閉じる", key="-ABOUT_CLOSE-")],
+            [eg.Button(tr("about.open_github"), key="-ABOUT_GITHUB-"), eg.Button(tr("common.close"), key="-ABOUT_CLOSE-")],
         ]
         location = None
         try:
             location = (window.window.winfo_x() + 60, window.window.winfo_y() + 60)
         except Exception:
             pass
-        dlg = eg.Window("バージョン情報", layout, modal=True, location=location)
+        dlg = eg.Window(tr("about.title"), layout, modal=True, location=location)
         event, _ = dlg.read()
         dlg.close()
         if event == "-ABOUT_GITHUB-":
@@ -3675,9 +3712,9 @@ class MainWindow:
             if profile:
                 window.events.put(("-SHOW_PROFILE_DIALOG-", {"profile": profile}))
             else:
-                window.events.put(("-ACTION_COMPLETE-", {"action": "プロフィール表示", "success": False, "error": "情報の取得に失敗しました"}))
+                window.events.put(("-ACTION_COMPLETE-", {"action": tr("action.show_profile"), "success": False, "error": tr("error.fetch_failed")}))
         except Exception as e:
-            window.events.put(("-ACTION_COMPLETE-", {"action": "プロフィール表示", "success": False, "error": str(e)}))
+            window.events.put(("-ACTION_COMPLETE-", {"action": tr("action.show_profile"), "success": False, "error": str(e)}))
 
     def _show_profile_dialog(self, profile, parent_window):
         location = None
@@ -3695,11 +3732,11 @@ class MainWindow:
         layout = [
             [eg.Text(f"{display_name}", font=(self.font_family, self.font_size + 4, "bold"))],
             [eg.Text(f"@{profile.handle}", font=(self.font_family, self.font_size), text_color="gray")],
-            [eg.Text(f"フォロー: {follows}  フォロワー: {followers}  ポスト: {posts}", font=(self.font_family, self.font_size))],
-            [eg.Frame("自己紹介", [[eg.Multiline(desc, size=(50, 8), readonly=True, expand_x=True, font=(self.font_family, self.font_size))]], expand_x=True)],
-            [eg.Button("閉じる", key="Close")]
+            [eg.Text(tr("profile.stats", follows=follows, followers=followers, posts=posts), font=(self.font_family, self.font_size))],
+            [eg.Frame(tr("profile.bio"), [[eg.Multiline(desc, size=(50, 8), readonly=True, expand_x=True, font=(self.font_family, self.font_size))]], expand_x=True)],
+            [eg.Button(tr("common.close"), key="Close")]
         ]
-        win = eg.Window("プロフィール情報", layout, modal=True, location=location)
+        win = eg.Window(tr("profile.title"), layout, modal=True, location=location)
         win.read()
         win.close()
 

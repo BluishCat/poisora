@@ -30,6 +30,7 @@ from utils.encryption import decrypt_password  # legacy config.json migration on
 from utils import credentials
 from utils.paths import get_resource_path, get_app_dir
 from utils import updater
+from utils.i18n import tr
 from ui.main_window import MainWindow
 
 class _PostOnlyFeedView:
@@ -45,7 +46,7 @@ class BlueskyApp:
     def __init__(self):
         self.api = BlueskyClientWrapper()
         # Initial dummy tabs, will be reinitialized after login
-        self.tabs = [TimelineTabModel("ホーム", "home"), TimelineTabModel("通知", "notifications")]
+        self.tabs = [TimelineTabModel(tr("tab.home"), "home"), TimelineTabModel(tr("tab.notifications"), "notifications")]
         
         # Persistence for read posts and hidden tabs
         self.ui_state = load_ui_state() or {}
@@ -136,7 +137,7 @@ class BlueskyApp:
 
     def handle_delete(self, post):
         if not self.is_own_post(post):
-            return False, "自分のポストではないため削除できません"
+            return False, tr("error.not_own_post")
         success, err = self.api.delete_post(post.uri)
         if success:
             self.bookmarked_uris.discard(post.uri)
@@ -166,10 +167,10 @@ class BlueskyApp:
     def handle_bookmark(self, post):
         if post.uri in self.bookmarked_uris:
             self.bookmarked_uris.remove(post.uri)
-            return True, "Removed from benchmarks"
+            return True, tr("bookmark.removed")
         else:
             self.bookmarked_uris.add(post.uri)
-            return True, "Added to bookmarks"
+            return True, tr("bookmark.added")
 
     def handle_get_profile(self, handle):
         return self.api.get_user_profile(handle)
@@ -255,9 +256,9 @@ class BlueskyApp:
         """Fetch pinned feeds and create tabs."""
         unsorted_tabs = []
         # Always add Home and Notifications
-        unsorted_tabs.append(TimelineTabModel("ホーム", "home"))
-        unsorted_tabs.append(TimelineTabModel("通知", "notifications"))
-        unsorted_tabs.append(TimelineTabModel("ブックマーク", "bookmarks"))
+        unsorted_tabs.append(TimelineTabModel(tr("tab.home"), "home"))
+        unsorted_tabs.append(TimelineTabModel(tr("tab.notifications"), "notifications"))
+        unsorted_tabs.append(TimelineTabModel(tr("tab.bookmarks"), "bookmarks"))
 
         
         # Add pinned feeds

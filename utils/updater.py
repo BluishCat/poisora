@@ -21,6 +21,7 @@ import zipfile
 import requests
 
 from utils.version import __version__
+from utils.i18n import tr
 
 REPO = "BluishCat/poisora"
 LATEST_API = f"https://api.github.com/repos/{REPO}/releases/latest"
@@ -75,17 +76,17 @@ def fetch_latest_release(timeout=_TIMEOUT):
     try:
         resp = requests.get(LATEST_API, headers=_headers(), timeout=timeout)
     except requests.RequestException as e:
-        raise UpdateError(f"GitHub に接続できませんでした: {e}") from e
+        raise UpdateError(tr("update.err.connect", error=e)) from e
     if resp.status_code == 404:
-        raise UpdateError("公開されているリリースが見つかりませんでした。")
+        raise UpdateError(tr("update.err.no_release"))
     if resp.status_code == 403:
-        raise UpdateError("GitHub の API 制限に達しました。しばらくしてから再度お試しください。")
+        raise UpdateError(tr("update.err.rate_limit"))
     if resp.status_code != 200:
-        raise UpdateError(f"更新情報を取得できませんでした (HTTP {resp.status_code})。")
+        raise UpdateError(tr("update.err.http", status=resp.status_code))
     try:
         data = resp.json()
     except ValueError as e:
-        raise UpdateError("更新情報の形式が不正です。") from e
+        raise UpdateError(tr("update.err.format")) from e
 
     tag = data.get("tag_name") or ""
     asset = None
@@ -138,11 +139,10 @@ def download_update(info, on_progress=None, exe=None):
     on_progress(done_bytes, total_bytes) を時々呼ぶ（ワーカースレッドから）。
     """
     if not info.get("asset_url"):
-        raise UpdateError("このリリースには更新用の zip が添付されていません。")
+        raise UpdateError(tr("update.err.no_zip"))
     if not info.get("sha256"):
         # 改ざん・破損を確認できないものは置き換えに使わない
-        raise UpdateError("更新ファイルのハッシュ値が取得できないため、自動更新できません。\n"
-                          "リリースページから手動で更新してください。")
+        raise UpdateError(tr("update.err.no_hash"))
 
     paths = _staged_paths(exe)
     _remove_quietly(paths["part"])
@@ -155,7 +155,7 @@ def download_update(info, on_progress=None, exe=None):
         with requests.get(info["asset_url"], headers={"User-Agent": f"Poisora/{__version__}"},
                           stream=True, timeout=_TIMEOUT) as resp:
             if resp.status_code != 200:
-                raise UpdateError(f"更新ファイルをダウンロードできませんでした (HTTP {resp.status_code})。")
+                raise UpdateError(tr("update.err.download_http", status=resp.status_code))
             total = int(resp.headers.get("Content-Length") or total or 0)
             with open(paths["part"], "wb") as f:
                 for chunk in resp.iter_content(_CHUNK):
@@ -168,21 +168,21 @@ def download_update(info, on_progress=None, exe=None):
                         on_progress(done, total)
     except requests.RequestException as e:
         _remove_quietly(paths["part"])
-        raise UpdateError(f"ダウンロード中にエラーが発生しました: {e}") from e
+        raise UpdateError(tr("update.err.download", error=e)) from e
     except OSError as e:
         _remove_quietly(paths["part"])
-        raise UpdateError(f"更新ファイルを保存できませんでした: {e}") from e
+        raise UpdateError(tr("update.err.save", error=e)) from e
 
     if hasher.hexdigest().lower() != info["sha256"]:
         _remove_quietly(paths["part"])
-        raise UpdateError("ダウンロードしたファイルのハッシュ値が一致しません（破損または改ざんの可能性）。")
+        raise UpdateError(tr("update.err.hash_mismatch"))
 
     try:
         with zipfile.ZipFile(paths["part"]) as z:
             members = [n for n in z.namelist()
                        if n.replace("\\", "/").rsplit("/", 1)[-1].lower() == EXE_NAME.lower()]
             if len(members) != 1:
-                raise UpdateError("更新用の zip に Poisora.exe が見つかりませんでした。")
+                raise UpdateError(tr("update.err.no_exe"))
             with z.open(members[0]) as src, open(paths["new"], "wb") as dst:
                 while True:
                     buf = src.read(_CHUNK)
@@ -191,14 +191,14 @@ def download_update(info, on_progress=None, exe=None):
                     dst.write(buf)
     except (zipfile.BadZipFile, OSError) as e:
         _remove_quietly(paths["new"])
-        raise UpdateError(f"更新ファイルを展開できませんでした: {e}") from e
+        raise UpdateError(tr("update.err.extract", error=e)) from e
     finally:
         _remove_quietly(paths["part"])
 
     with open(paths["new"], "rb") as f:
         if f.read(2) != b"MZ":
             _remove_quietly(paths["new"])
-            raise UpdateError("展開した更新ファイルが実行ファイルではありません。")
+            raise UpdateError(tr("update.err.not_exe"))
     return paths["new"]
 
 
@@ -212,8 +212,7 @@ def apply_update(new_path, exe=None):
     try:
         os.replace(exe, old)
     except OSError as e:
-        raise UpdateError(f"現在の exe を置き換えられませんでした: {e}\n"
-                          f"フォルダーへの書き込み権限を確認してください。") from e
+        raise UpdateError(tr("update.err.replace", error=e)) from e
     try:
         os.replace(new_path, exe)
     except OSError as e:
@@ -221,12 +220,19 @@ def apply_update(new_path, exe=None):
             os.replace(old, exe)
         except OSError:
             pass
-        raise UpdateError(f"新しい exe を配置できませんでした: {e}") from e
+        raise UpdateError(tr("update.err.place", error=e)) from e
     return exe
 
 
 def restart_app(exe=None):
-    """新しい exe を別プロセスで起動する（呼び出し側はこの後すぐ終了すること）。"""
+    """新しい exe を別プロセスで起動する（呼び出し側はこの後すぐ終了すること）。
+
+    ソースから実行しているとき（言語の変更による再起動など）は同じスクリプトを起動し直す。
+    """
+    if exe is None and not getattr(sys, "frozen", False):
+        script = os.path.abspath(sys.argv[0])
+        subprocess.Popen([sys.executable, script, *sys.argv[1:]], cwd=os.getcwd(), close_fds=True)
+        return
     exe = exe or _exe_path()
     env = dict(os.environ)
     # PyInstaller onefile の子孫として起動すると親の展開先(_MEI…)を引き継いでしまうため、

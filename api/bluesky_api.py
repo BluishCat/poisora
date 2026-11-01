@@ -7,6 +7,7 @@ import requests
 from atproto import Client, models
 
 from utils import linkcard, richtext
+from utils.i18n import tr
 
 # 動画は PDS へ直接 uploadBlob するのではなく、公式の動画サービスに先に渡してエンコードさせる。
 # 直接 uploadBlob すると投稿が firehose に流れるまでエンコードが始まらず、
@@ -239,9 +240,9 @@ class BlueskyClientWrapper:
         記録されている root を引き継ぎ、そうでなければ親がそのまま root になる。
         cid はタイムライン取得時の値を使わず送信直前に取り直す（編集・削除に追従するため）。
         """
-        parent_view = self._fetch_post_view(parent_uri, "返信先のポストが見つかりません（削除された可能性があります）")
+        parent_view = self._fetch_post_view(parent_uri, tr("api.reply_target_missing"))
         if getattr(getattr(parent_view, "viewer", None), "reply_disabled", False):
-            raise RuntimeError("このポストは返信できない設定になっています")
+            raise RuntimeError(tr("api.reply_disabled"))
         parent_ref = models.create_strong_ref(parent_view)
 
         record = parent_view.record
@@ -256,9 +257,9 @@ class BlueskyClientWrapper:
 
     def _build_quote_embed(self, quote_uri):
         """引用元ポストの URI から引用の embed を組み立てる（cid は送信直前に取り直す）"""
-        view = self._fetch_post_view(quote_uri, "引用元のポストが見つかりません（削除された可能性があります）")
+        view = self._fetch_post_view(quote_uri, tr("api.quote_target_missing"))
         if getattr(getattr(view, "viewer", None), "embedding_disabled", False):
-            raise RuntimeError("このポストは引用できない設定になっています")
+            raise RuntimeError(tr("api.quote_disabled"))
         return models.AppBskyEmbedRecord.Main(record=models.create_strong_ref(view))
 
     def _build_facets(self, text):
@@ -334,9 +335,9 @@ class BlueskyClientWrapper:
             on_progress(job.get("state"), job.get("progress"))
 
             if job.get("state") == "JOB_STATE_FAILED":
-                raise RuntimeError(job.get("message") or job.get("failureCode") or "動画の処理に失敗しました")
+                raise RuntimeError(job.get("message") or job.get("failureCode") or tr("api.video_failed"))
             if time.time() > deadline:
-                raise RuntimeError("動画の処理が時間内に終わりませんでした")
+                raise RuntimeError(tr("api.video_timeout"))
 
             time.sleep(VIDEO_JOB_POLL_INTERVAL_SEC)
             status = requests.get(
@@ -359,7 +360,7 @@ class BlueskyClientWrapper:
         try:
             body = response.json()
         except ValueError:
-            raise RuntimeError(f"動画サービスが予期しない応答を返しました (HTTP {response.status_code})")
+            raise RuntimeError(tr("api.video_unexpected", status=response.status_code))
 
         job = body.get("jobStatus") or body
         if job.get("blob") or job.get("jobId"):
@@ -373,7 +374,7 @@ class BlueskyClientWrapper:
             return False, "Not logged in"
         try:
             if not self.client.delete_post(uri):
-                return False, "削除に失敗しました"
+                return False, tr("api.delete_failed")
             return True, None
         except Exception as e:
             return False, str(e)
