@@ -39,6 +39,7 @@ if IS_WINDOWS:
 
 datas = [('sound', 'sound')]  # サウンドファイルを同梱
 datas += [('assets/poisora.png', 'assets')]  # ウィンドウアイコン（utils/app_icon.py）
+datas += [('locales', 'locales')]  # UI の翻訳（utils/i18n.py）
 binaries = []
 hiddenimports = [
     'atproto', 'atproto_client', 'pydantic', 'pydantic_core', 'typing_extensions',
