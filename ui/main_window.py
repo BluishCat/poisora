@@ -1585,6 +1585,14 @@ class MainWindow:
                     overlay_widget.master.pack_forget()
         except Exception: pass
         
+        # ステータスバーの行を下端に先に詰めておく。pack は先に詰めた行から場所を取るため、
+        # 上のペインの要求サイズがウィンドウより大きいと、最後の行のステータスバーが押し出されて消える。
+        try:
+            sb_row = window["-STATUS_BAR-"].widget.master
+            sb_row.pack_configure(side="bottom", before=window["-MAIN_PANED-"].widget.master)
+        except Exception:
+            pass
+
         # Hide initial logic
         window["-DETAIL_PANED-"].set_pane2_visible(False)
         _set_elem_visible(window["-INLINE_POST_CLEAR_IMAGE-"], False)
@@ -2741,15 +2749,22 @@ class MainWindow:
         """Build a full custom menubar with a dynamic feed visibility menu."""
         root = window.window
 
-        # Destroy the existing menubar (created by eg.Menu)
+        # eg.Menu が作ったメニューバーは付け替えず、中身だけ作り直す。
+        # Windows の Tk はメニューバーを付け替えるとその高さぶんウィンドウを縮めるため、
+        # 付け替えると起動のたびに保存サイズが小さくなっていく。
+        menubar = None
         try:
             existing_name = root.cget('menu')
             if existing_name:
-                root.nametowidget(existing_name).destroy()
+                menubar = root.nametowidget(existing_name)
+                menubar.delete(0, "end")
+                for child in menubar.winfo_children():
+                    child.destroy()
         except Exception:
-            pass
-
-        menubar = tk.Menu(root)
+            menubar = None
+        attach = menubar is None
+        if attach:
+            menubar = tk.Menu(root)
 
         # ---- ファイル ----
         file_menu = tk.Menu(menubar, tearoff=0)
@@ -2781,7 +2796,8 @@ class MainWindow:
         help_menu.add_command(label=tr("menu.about"), command=lambda: window.dispatch_event("About"))
         menubar.add_cascade(label=tr("menu.help"), menu=help_menu)
 
-        root.config(menu=menubar)
+        if attach:
+            root.config(menu=menubar)
 
     def _refresh_feed_menu_entries(self, tabs, all_tabs, window):
         """Rebuild entries in the フィード submenu, marking visible tabs with ✓."""
