@@ -7,6 +7,7 @@ import tkinter as tk
 from tkinter import ttk, font as tkfont, filedialog, messagebox
 import requests
 import threading
+import time
 import webbrowser
 import queue
 from collections import OrderedDict
@@ -25,6 +26,10 @@ from models.tab import TimelineTabModel
 
 # ウィンドウタイトルの共通部分。ログイン後の統計付きタイトルも同じ前半を使う
 APP_TITLE = f"Poisora v{__version__}"
+# 起動中も 1 日 1 回は新しいバージョンを確認する（1 時間ごとに前回の確認から 24 時間たったかを見る。
+# スリープ明けでも次の見回りで確認される）
+UPDATE_CHECK_INTERVAL_SEC = 24 * 60 * 60
+UPDATE_CHECK_TICK_MS = 60 * 60 * 1000
 
 apply_default_window_icon()
 
@@ -1371,10 +1376,56 @@ class MainWindow:
         if error:
             status.update(f" {tr('status.error', action=tr('menu.refresh'), error=error)}")
         elif getattr(self, "_refreshes_running", 0) > 0:
-            if current in (refreshing, f" {tr('status.ready')}"):
+            if current == refreshing or self._is_idle_status(current):
                 status.update(refreshing)
         elif current == refreshing:
-            status.update(f" {tr('status.ready')}")
+            status.update(self._ready_text())
+
+    def _ready_text(self):
+        """何もしていないときのステータスバーの文言。新しいバージョンがあればそれも添える"""
+        text = f" {tr('status.ready')}"
+        version = getattr(self, "_update_notice_version", None)
+        if version:
+            text += f"  |  {tr('status.update_available', version=version)}"
+        return text
+
+    def _is_idle_status(self, text):
+        return text == f" {tr('status.ready')}" or text == self._ready_text()
+
+    def _set_update_notice(self, window, version):
+        """新しいバージョンをステータスバーとヘルプメニューで控えめに知らせる（None で消す）"""
+        if getattr(self, "_update_notice_version", None) == version:
+            return
+        try:
+            current = window["-STATUS_BAR-"].widget.cget("text")
+            was_idle = self._is_idle_status(current)
+        except Exception:
+            was_idle = False
+        self._update_notice_version = version
+        if was_idle:
+            try:
+                window["-STATUS_BAR-"].update(self._ready_text())
+            except Exception:
+                pass
+        try:
+            window["-STATUS_BAR-"].widget.configure(cursor="hand2" if version else "")
+        except Exception:
+            pass
+        self._apply_update_notice_to_menu()
+
+    def _apply_update_notice_to_menu(self):
+        menubar = getattr(self, "_menubar", None)
+        help_menu = getattr(self, "_help_menu", None)
+        if menubar is None or help_menu is None:
+            return
+        version = getattr(self, "_update_notice_version", None)
+        try:
+            help_label = tr("menu.help") + (" ●" if version else "")
+            menubar.entryconfigure(self._help_menu_index, label=help_label)
+            item_label = tr("menu.check_update_available", version=version) if version else tr("menu.check_update")
+            help_menu.entryconfigure(self._check_update_index, label=item_label)
+        except Exception:
+            pass
 
     def _make_tab_element(self, tab):
         """タイムライン 1 タブぶんの eg.Tab（中に一覧の CustomTable）を作る"""
@@ -2018,7 +2069,9 @@ class MainWindow:
             text_widget.config(cursor="")
             if hover["saved"] is not None:
                 try:
-                    window["-STATUS_BAR-"].update(hover["saved"])
+                    saved = hover["saved"]
+                    # ポイント中に更新のお知らせが変わっても、最新の待機中表示に戻す
+                    window["-STATUS_BAR-"].update(self._ready_text() if self._is_idle_status(saved) else saved)
                 except Exception:
                     pass
                 hover["saved"] = None
@@ -2250,6 +2303,29 @@ class MainWindow:
         # 起動時の更新確認（タイムラインの初回読み込みと重ならないよう少し遅らせる）
         if self.ui_settings.get("auto_update_check", True):
             window.window.after(5000, lambda: self._start_update_check(window, manual=False))
+
+        # 起動中の定期確認。見つけてもダイアログは出さず、ステータスバーとメニューで知らせる
+        def _periodic_update_check():
+            try:
+                if self.ui_settings.get("auto_update_check", True) and not getattr(self, "_update_busy", False):
+                    now = time.time()
+                    last = float(self.ui_settings.get("last_update_check") or 0)
+                    # 時計が戻された（前回が未来になっている）ときも確認し直す
+                    if now - last >= UPDATE_CHECK_INTERVAL_SEC or now < last:
+                        self._start_update_check(window, manual=False, quiet=True)
+            except Exception:
+                pass
+            window.window.after(UPDATE_CHECK_TICK_MS, _periodic_update_check)
+        window.window.after(UPDATE_CHECK_TICK_MS, _periodic_update_check)
+
+        # お知らせが出ているときはステータスバーのクリックで更新の確認を開く
+        def _on_status_click(event):
+            if getattr(self, "_update_notice_version", None):
+                window.dispatch_event("Check Update")
+        try:
+            window["-STATUS_BAR-"].widget.bind("<Button-1>", _on_status_click)
+        except Exception:
+            pass
 
         while True:
             event, values = window.read()
@@ -2618,7 +2694,7 @@ class MainWindow:
                         status_elem.update(f" {tr('status.success', action=action)}")
                         # action は既定引数で固定する（ループ変数のままだと、5秒の間に別の操作をすると
                         # その操作の「成功」表示を消してしまう）
-                        window.window.after(5000, lambda a=action: status_elem.update(f" {tr('status.ready')}") if status_elem.widget.cget("text") == f" {tr('status.success', action=a)}" else None)
+                        window.window.after(5000, lambda a=action: status_elem.update(self._ready_text()) if status_elem.widget.cget("text") == f" {tr('status.success', action=a)}" else None)
                 else:
                     if status_elem:
                         status_elem.update(f" {tr('status.error', action=action, error=error)}")
@@ -2792,9 +2868,13 @@ class MainWindow:
         # ---- ヘルプ ----
         help_menu = tk.Menu(menubar, tearoff=0)
         help_menu.add_command(label=tr("menu.check_update"), command=lambda: window.dispatch_event("Check Update"))
+        self._check_update_index = help_menu.index("end")
         help_menu.add_separator()
         help_menu.add_command(label=tr("menu.about"), command=lambda: window.dispatch_event("About"))
         menubar.add_cascade(label=tr("menu.help"), menu=help_menu)
+        self._help_menu_index = menubar.index("end")
+        self._menubar, self._help_menu = menubar, help_menu
+        self._apply_update_notice_to_menu()
 
         if attach:
             root.config(menu=menubar)
@@ -3178,6 +3258,8 @@ class MainWindow:
             state["language"] = self.ui_settings.get("language", i18n.AUTO)
             if self.ui_settings.get("skipped_update_version"):
                 state["skipped_update_version"] = self.ui_settings["skipped_update_version"]
+            if self.ui_settings.get("last_update_check"):
+                state["last_update_check"] = self.ui_settings["last_update_check"]
             
             # Read Posts and Hidden Tabs
             if hasattr(self, "_app_ref") and self._app_ref:
@@ -3621,8 +3703,9 @@ class MainWindow:
 
     # ---------------- 更新の確認・自己更新 ----------------
 
-    def _start_update_check(self, window, manual):
-        """GitHub の最新リリースをバックグラウンドで確認する。結果は -UPDATE_CHECK_RESULT- で届く。"""
+    def _start_update_check(self, window, manual, quiet=False):
+        """GitHub の最新リリースをバックグラウンドで確認する。結果は -UPDATE_CHECK_RESULT- で届く。
+        quiet=True（起動中の定期確認）は見つけてもダイアログを出さず、お知らせだけ出す。"""
         if getattr(self, "_update_busy", False):
             if manual:
                 messagebox.showinfo(tr("update.check_title"), tr("update.busy"), parent=window.window)
@@ -3632,16 +3715,19 @@ class MainWindow:
         def worker():
             try:
                 info = updater.fetch_latest_release()
-                window.events.put(("-UPDATE_CHECK_RESULT-", {"manual": manual, "info": info}))
+                window.events.put(("-UPDATE_CHECK_RESULT-", {"manual": manual, "quiet": quiet, "info": info}))
             except Exception as e:
-                window.events.put(("-UPDATE_CHECK_RESULT-", {"manual": manual, "error": str(e)}))
+                window.events.put(("-UPDATE_CHECK_RESULT-", {"manual": manual, "quiet": quiet, "error": str(e)}))
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_update_check_result(self, window, tabs, data):
         """確認結果を表示する。ダウンロードへ進むなら True を返す（_update_busy は維持）。"""
         manual = data.get("manual", False)
+        quiet = data.get("quiet", False)
         info = data.get("info")
+        if info:
+            self.ui_settings["last_update_check"] = time.time()
         if not info:
             self._update_busy = False
             if manual:
@@ -3651,6 +3737,7 @@ class MainWindow:
         latest = info.get("version") or ""
         if not updater.is_newer(latest):
             self._update_busy = False
+            self._set_update_notice(window, None)
             if manual:
                 messagebox.showinfo(tr("update.check_title"), tr("update.up_to_date", version=__version__), parent=window.window)
             return False
@@ -3660,12 +3747,19 @@ class MainWindow:
             self._update_busy = False
             return False
 
+        # 「後で」を選んだときや定期確認で見つけたときのために、お知らせは常に出しておく
+        self._set_update_notice(window, latest)
+        if quiet:
+            self._update_busy = False
+            return False
+
         choice = self._show_update_dialog(window, info, manual)
         if choice == "update":
             return True
         self._update_busy = False
         if choice == "skip":
             self.ui_settings["skipped_update_version"] = latest
+            self._set_update_notice(window, None)
             self.save_current_ui_state(window, tabs)
         elif choice == "page":
             open_url_safely(info.get("html_url") or updater.RELEASES_PAGE)
